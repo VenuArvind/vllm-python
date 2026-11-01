@@ -1,131 +1,65 @@
 # Fault-Tolerant LLM Serving Engine (from Scratch)
 
-A lightweight, educational, yet high-performance LLM serving engine built in pure Python and PyTorch from first principles. Inspired by [vLLM](https://github.com/vllm-project/vllm), this project implements PagedAttention, Continuous Batching, KV-Cache memory management, an asynchronous HTTP serving runtime, and an advanced distributed fault-tolerance layer with Redis and Write-Ahead Logging (WAL).
+A lightweight, high-performance LLM serving engine built in pure Python and PyTorch from first principles.
 
 ---
 
-## 🌟 Architecture Overview
+## 🛠️ Implemented Components (Phase 1: The Transformer Core)
 
-```text
-                               +-----------------------------+
-                               |     Client HTTP Request     |
-                               +-----------------------------+
-                                              |
-                                              v
-                               +-----------------------------+
-                               |    FastAPI Serving Gateway   |
-                               +-----------------------------+
-                                              |
-                                              v
-    +-----------------------------------------------------------------------+
-    |                             SUPERVISOR                                |
-    |      * Multiprocessing Process Manager (Heartbeat & Watchdog)         |
-    |      * Append-Only Write-Ahead Log (WAL) for Request Durability      |
-    +-----------------------------------------------------------------------+
-                        |                                   ^
-       Spawns / Manages |                                   | Syncs state / WAL
-                        v                                   v
-    +-----------------------------------------------------------------------+
-    |                         ENGINE WORKER PROCESS                         |
-    |                                                                       |
-    |  +-----------------------------------------------------------------+  |
-    |  | Continuous Batching Scheduler                                   |  |
-    |  | - Manages WAITING, RUNNING, and FINISHED sequence states        |  |
-    |  | - Preempts & reschedules requests dynamically                   |  |
-    |  +-----------------------------------------------------------------+  |
-    |                                   |                                   |
-    |                                   v                                   |
-    |  +-----------------------------------------------------------------+  |
-    |  | PagedAttention & BlockManager                                   |  |
-    |  | - Logical-to-Physical page table mapping                        |  |
-    |  | - Non-contiguous VRAM page allocation to eliminate fragmentation|  |
-    |  +-----------------------------------------------------------------+  |
-    |                                   |                                   |
-    |                                   v                                   |
-    |  +-----------------------------------------------------------------+  |
-    |  | Custom Transformer Execution Engine                             |  |
-    |  | - GPT-2 Architecture with Rotary Positional Embeddings (RoPE)   |  |
-    |  | - Static & Paged KV-Cache access                                |  |
-    |  +-----------------------------------------------------------------+  |
-    +-----------------------------------------------------------------------+
-                        |                                   ^
-            Async state |                                   | Fast snapshot
-            snapshots   v                                   | restore
-    +-----------------------------------------------------------------------+
-    |                         REDIS KV-STATE STORE                          |
-    |      * Physical KV-Cache page serializations & logical mappings       |
-    |      * Instant failover recovery without prefill recomputation        |
-    +-----------------------------------------------------------------------+
-```
+### 1. Rotary Positional Embeddings (RoPE) — [`model/transformer.py`](model/transformer.py)
+* **`rotate_half(x)`**: Rotates the last dimension of Query/Key tensors by grouping features into pairs and applying a $90^\circ$ rotation: $[-x_2, x_1]$.
+* **`RotaryEmbedding`**: Computes inverse frequency vectors $\theta_i = \text{base}^{-2i/d}$, caches $\cos$ and $\sin$ tables up to `max_seq_len`, and indexes into positions dynamically to support non-zero starting offsets.
+* **`apply_rotary_pos_emb(x, cos, sin)`**: Vectorized rotation applying $(x \odot \cos) + (\text{rotate\_half}(x) \odot \sin)$ to queries and keys.
+
+### 2. Causal Multi-Head Attention — [`model/attention.py`](model/attention.py)
+* **`MultiHeadAttention`**:
+  * Linear projections: $W_q, W_k, W_v \in \mathbb{R}^{H \times H}$ and $W_o \in \mathbb{R}^{H \times H}$.
+  * Tensor reshaping and transposition to head-first format: `[batch_size, num_heads, seq_len, head_dim]`.
+  * Integrates RoPE on $Q$ and $K$ across all heads.
+  * Supports autoregressive KV-caching via sequence-dimension concatenation (`dim=2`).
+  * Scaled dot-product attention: $\text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}} + \text{mask}\right) V$.
+  * Merges heads and projects back to `hidden_dim`.
+
+### 3. FeedForward Network (MLP) — [`model/transformer.py`](model/transformer.py)
+* **`FeedForwardNetwork`**:
+  * Two-layer projection ($H \to 4H \to H$) with `approximate="tanh"` GELU activation.
+
+### 4. Transformer Block — [`model/transformer.py`](model/transformer.py)
+* **`TransformerBlock`**:
+  * Modern Pre-Layer Normalization architecture with residual skip connections:
+    $$x_1 = x + \text{Attention}(\text{LN}_1(x))$$
+    $$x_2 = x_1 + \text{FFN}(\text{LN}_2(x_1))$$
+  * Propagates and updates layer-specific `(k, v)` cache states.
+
+### 5. GPT Model Assembly — [`model/transformer.py`](model/transformer.py)
+* **`GPTModel`**:
+  * Token embeddings lookup table: `wte` ($V \times H$).
+  * Dynamic RoPE position assignment handling both prefill ($S > 1$) and single-token decode ($S = 1$) modes.
+  * Causal lower-triangular attention masking during prompt prefill.
+  * Stack of $L$ transformer blocks (`nn.ModuleList`).
+  * Final layer normalization (`ln_f`) and un-embedding linear head (`lm_head`).
+  * Weight tying between `wte` and `lm_head`.
 
 ---
 
-## 📁 Repository Layout
+## 📁 Current Project Layout
 
 ```text
-vllm-fault-tolerant/
+vllm-python/
 ├── model/
-│   ├── attention.py       # MultiHeadAttention & PagedAttention tensor operations
-│   ├── kv_cache.py        # Static and dynamic multi-sequence KV-Cache
-│   └── transformer.py     # RoPE, FFN, TransformerBlock, and GPTModel definitions
-├── engine/
-│   ├── block_manager.py   # Logical-to-physical block table allocator
-│   ├── scheduler.py       # Continuous batching scheduler & preemption logic
-│   └── inference.py       # SimpleLLMEngine step loop orchestration
-├── serving/
-│   └── api.py             # FastAPI async gateway, endpoints, & background queues
-├── distributed/
-│   ├── supervisor.py      # Worker watchdog process & Write-Ahead Log (WAL)
-│   └── state_sync.py      # Redis client for KV-cache and page table replication
-├── tests/                 # Unit and integration test suites for every phase
+│   ├── attention.py       # MultiHeadAttention with RoPE and KV-caching
+│   └── transformer.py     # RoPE, FFN, TransformerBlock, and GPTModel
+├── engine/                # (Next: KV-Cache & BlockManager)
+├── serving/               # (Next: FastAPI serving layer)
+├── distributed/           # (Next: Supervisor WAL & Redis state sync)
+├── tests/                 # Unit and integration test suites
 ├── requirements.txt       # Environment dependencies
-└── main.py                # Standalone test runner and CLI entrypoint
+└── README.md
 ```
 
 ---
 
-## 🚀 Implementation Roadmap (7 Phases)
+## 🧪 Verified Capabilities
 
-### 🔹 Phase 1: The Custom Transformer (`model/`)
-- **Rotary Positional Embeddings (RoPE):** Complex rotation matrices for relative position encoding.
-- **Causal Multi-Head Attention:** Multi-head scaled dot-product attention with support for past KV-caching.
-- **GPT Model Assembly:** FeedForward networks, LayerNorm, stacked Transformer blocks, and loading pre-trained weights from HuggingFace.
-
-### 🔹 Phase 2: Static KV-Caching (`model/kv_cache.py`)
-- **Eliminating `torch.cat` Overhead:** Pre-allocate static zeroed KV tensors in GPU/CPU memory to avoid constant tensor reallocation.
-- **Batch Tracking (`MultiSeqKVCache`):** Manage slot offsets and write new key/value representations in $\mathcal{O}(1)$ time.
-
-### 🔹 Phase 3: PagedAttention & Block Manager (`engine/block_manager.py`)
-- **Virtual Memory Paging:** Partition KV-cache memory into fixed-size physical blocks (e.g., 16 tokens/block).
-- **Block Allocation & Freeing:** Logical token indices dynamically mapped to arbitrary physical block IDs.
-- **Zero-Fragmentation Guarantee:** Prevent GPU Out-Of-Memory (OOM) caused by memory fragmentation.
-
-### 🔹 Phase 4: Continuous Batching Scheduler (`engine/scheduler.py`)
-- **Sequence Lifecycle Tracking:** States for `WAITING`, `RUNNING`, and `FINISHED`.
-- **Iteration-Level Scheduling:** Re-evaluate the batch on every generated token rather than waiting for an entire batch to finish.
-- **Request Preemption:** Gracefully swap or preempt lower-priority/newer requests when physical blocks are exhausted.
-
-### 🔹 Phase 5: The Inference Engine (`engine/inference.py`)
-- **Engine Step Loop (`SimpleLLMEngine`):** Tie scheduling, block table lookup, model forward execution, and token sampling together.
-- **Generation Control:** Nucleus/temperature sampling, EOS termination, and streaming output buffers.
-
-### 🔹 Phase 6: Asynchronous Serving API (`serving/api.py`)
-- **FastAPI Endpoint:** POST `/generate` interface compatible with modern streaming clients.
-- **Decoupled Architecture:** Thread/process-isolated queues separating HTTP I/O from compute-heavy inference loops.
-
-### 🔹 Phase 7: Distributed Fault Tolerance & Redis State Sync (`distributed/`)
-- **Process Supervisor & WAL:** An append-only Write-Ahead Log to record incoming requests and automatically reboot workers on crashes.
-- **Redis KV State Persistence:** Stream active page tables and KV-cache blocks to Redis.
-- **Instant Failover:** Rebooted workers load cache blocks from Redis, skipping prefill computations on resumed generations.
-
----
-
-## 🛠️ Prerequisites & Stack
-
-- **Language:** Python 3.10+
-- **Deep Learning:** PyTorch (Apple Silicon MPS, CUDA, or CPU)
-- **Web Framework:** FastAPI, Uvicorn
-- **Distributed State:** Redis, `redis-py`
-- **Tokenizer / Utilities:** Hugging Face `transformers`, `tiktoken`
-- **Testing:** `pytest`
-
+* **Full Prefill Forward Pass:** Input `[batch_size, seq_len]` $\to$ Logits `[batch_size, seq_len, vocab_size]` verified.
+* **Autoregressive Single-Token Step:** Generates next-token logits `[batch_size, 1, vocab_size]` and accumulates KV cache across all layers.
