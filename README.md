@@ -18,9 +18,14 @@ A lightweight LLM serving engine built from scratch in pure Python and PyTorch.
 * Standard MLP with GELU activation.
 * Pre-Layer Normalization architecture with residual connections.
 
-### 4. GPT Model — `model/transformer.py`
+### 4. GPT Model & HuggingFace Weight Loading — `model/transformer.py`
 * Decoder-only Transformer model assembling token embeddings, stacked Transformer blocks, final LayerNorm, and tied language model head.
+* HuggingFace weight importer (`from_pretrained`) that translates OpenAI `Conv1D` and fused QKV parameters into our custom architecture.
 * Verified for both prompt prefill and iterative single-token generation with KV-caching.
+
+### 5. Pre-Allocated KV-Cache — `model/kv_cache.py`
+* **`StaticKVCache`**: Eliminates `torch.cat` memory allocations by writing new keys and values into pre-allocated static tensors in constant $\mathcal{O}(1)$ time.
+* **`MultiSeqKVCache`**: Multi-layer, multi-sequence cache tracking independent sequence lengths per request to support continuous batching.
 
 ---
 
@@ -30,10 +35,12 @@ A lightweight LLM serving engine built from scratch in pure Python and PyTorch.
 vllm-python/
 ├── model/
 │   ├── attention.py       # MultiHeadAttention with RoPE and KV-cache support
+│   ├── kv_cache.py        # StaticKVCache & MultiSeqKVCache memory managers
 │   └── transformer.py     # RoPE, FFN, TransformerBlock, and GPTModel
-├── engine/                # KV-Cache & BlockManager (In Progress)
+├── engine/                # BlockManager & PagedAttention (In Progress)
 ├── serving/               # FastAPI serving layer
 ├── distributed/           # Fault tolerance & state sync
+├── tests/                 # Unit & integration test suites
 ├── requirements.txt
 └── README.md
 ```
