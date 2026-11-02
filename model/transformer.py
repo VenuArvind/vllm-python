@@ -201,3 +201,73 @@ class GPTModel(nn.Module):
         logits = self.lm_head(x)
         return logits, new_kv
         
+    @classmethod
+    def from_pretrained(cls, model_name: str = "gpt2") -> "GPTModel":
+        """
+        :param model_name: (str) name of the model
+        :return: (GPTModel) instance of the model
+
+        Load the model from the pre-trained weights.
+        """
+
+        from transformers import GPT2LMHeadModel 
+
+        print(f"Loading weights from HuggingFace '{model_name}'...")
+        hf_model = GPT2LMHeadModel.from_pretrained(model_name)
+        hf_sd = hf_model.state_dict()
+        config = hf_model.config        
+
+        model = cls(
+            vocab_size=config.vocab_size,
+            hidden_dim=config.n_embd,
+            num_layers=config.n_layer,
+            num_heads=config.n_head,
+            max_seq_len=config.n_positions,
+        )
+
+        with torch.no_grad():
+            # Token embeddings
+            model.wte.weight.copy_(hf_sd["transformer.wte.weight"])
+
+            # Iterate through layers
+            for i in range(config.n_layer):
+                prefix = f"transformer.h.{i}"
+                block = model.blocks[i]
+
+                #LAyer Norm 1
+                block.ln1.weight.copy_(hf_sd[f"{prefix}.ln_1.weight"])
+                block.ln1.bias.copy_(hf_sd[f"{prefix}.ln_1.bias"])
+
+                qkv_w = hf_sd[f"{prefix}.attn.c_attn.weight"]
+                q_w, k_w, v_w = qkv_w.split(config.n_embd, dim=1)
+                block.self_attn.q_proj.weight.copy_(q_w.t())
+                block.self_attn.k_proj.weight.copy_(k_w.t())
+                block.self_attn.v_proj.weight.copy_(v_w.t())
+                # If linear layers have biases, copy them too
+                if block.self_attn.q_proj.bias is not None:
+                    qkv_b = hf_sd[f"{prefix}.attn.c_attn.bias"]
+                    q_b, k_b, v_b = qkv_b.split(config.n_embd, dim=0)
+                    block.self_attn.q_proj.bias.copy_(q_b)
+                    block.self_attn.k_proj.bias.copy_(k_b)
+                    block.self_attn.v_proj.bias.copy_(v_b)
+                # Attention: Out projection
+                block.self_attn.o_proj.weight.copy_(hf_sd[f"{prefix}.attn.c_proj.weight"].t())
+                if block.self_attn.o_proj.bias is not None:
+                    block.self_attn.o_proj.bias.copy_(hf_sd[f"{prefix}.attn.c_proj.bias"])
+                # LayerNorm 2
+                block.ln2.weight.copy_(hf_sd[f"{prefix}.ln_2.weight"])
+                block.ln2.bias.copy_(hf_sd[f"{prefix}.ln_2.bias"])
+                # FeedForward Network (MLP)
+                block.ffn.fc1.weight.copy_(hf_sd[f"{prefix}.mlp.c_fc.weight"].t())
+                if block.ffn.fc1.bias is not None:
+                    block.ffn.fc1.bias.copy_(hf_sd[f"{prefix}.mlp.c_fc.bias"])
+                block.ffn.fc2.weight.copy_(hf_sd[f"{prefix}.mlp.c_proj.weight"].t())
+                if block.ffn.fc2.bias is not None:
+                    block.ffn.fc2.bias.copy_(hf_sd[f"{prefix}.mlp.c_proj.bias"])
+            # 4. Final LayerNorm
+            model.ln_f.weight.copy_(hf_sd["transformer.ln_f.weight"])
+            model.ln_f.bias.copy_(hf_sd["transformer.ln_f.bias"])
+            # 5. LM Head (shares weights with wte)
+            model.lm_head.weight = model.wte.weight
+        print("All weights copied successfully!")
+        return model
