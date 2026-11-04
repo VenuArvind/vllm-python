@@ -42,6 +42,13 @@ A lightweight LLM serving engine built from scratch in pure Python and PyTorch.
 * Decoupled **prefill** (full prompt processing) and **decode** (single-token generation) execution passes.
 * Verified multi-prompt concurrent batching with automatic physical block recycling upon sequence completion.
 
+### 9. Asynchronous Serving API — `serving/api.py`
+* Decoupled producer-consumer architecture using `asyncio.Queue` and `asyncio.Future` to prevent heavy PyTorch forward passes from blocking the HTTP event loop.
+* Endpoints:
+  * `POST /generate`: Validated Pydantic schema with streaming future resolution.
+  * `GET /health`: Liveness probe.
+  * `GET /stats`: Real-time engine telemetry (`free_blocks`, `waiting`, `running`, `finished`).
+
 ---
 
 ## Project Structure
@@ -56,8 +63,9 @@ vllm-python/
 │   ├── block_manager.py   # Paged memory block allocator & page tables
 │   ├── scheduler.py       # Static & Continuous Batching schedulers
 │   └── inference.py       # SimpleLLMEngine runtime orchestrator
-├── serving/               # FastAPI serving layer (Next)
-├── distributed/           # Fault tolerance & state sync
+├── serving/
+│   └── api.py             # FastAPI async gateway, endpoints, & background loop
+├── distributed/           # Fault tolerance & state sync (Next)
 ├── tests/                 # Unit & integration test suites
 ├── requirements.txt
 └── README.md
