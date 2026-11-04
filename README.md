@@ -62,3 +62,11 @@ vllm-python/
 ├── requirements.txt
 └── README.md
 ```
+
+---
+
+## 📚 References & Inspirations
+
+* **vLLM Architecture & PagedAttention Blog:** [vLLM: Easy, Fast, and Cheap LLM Serving with PagedAttention](https://blog.vllm.ai/2023/06/20/vllm.html)
+* **Reference Implementation Repository:** [oms0401/vLLM-from-scratch](https://github.com/oms0401/vLLM-from-scratch)
+* **Official vLLM Project Repository:** [vllm-project/vllm](https://github.com/vllm-project/vllm)
