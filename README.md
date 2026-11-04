@@ -37,6 +37,11 @@ A lightweight LLM serving engine built from scratch in pure Python and PyTorch.
 * **`StaticBatchingScheduler`**: Traditional batching baseline that locks a batch until all sequences finish.
 * **`ContinuousBatchingScheduler`**: Iteration-level continuous batching with instant finished sequence eviction, zero-delay waiting request admission, and memory preemption protection.
 
+### 8. The Inference Engine (`SimpleLLMEngine`) — `engine/inference.py`
+* Master runtime orchestrator uniting the custom model, tokenizer, block manager, and continuous batching scheduler.
+* Decoupled **prefill** (full prompt processing) and **decode** (single-token generation) execution passes.
+* Verified multi-prompt concurrent batching with automatic physical block recycling upon sequence completion.
+
 ---
 
 ## Project Structure
@@ -50,8 +55,8 @@ vllm-python/
 ├── engine/
 │   ├── block_manager.py   # Paged memory block allocator & page tables
 │   ├── scheduler.py       # Static & Continuous Batching schedulers
-│   └── inference.py       # SimpleLLMEngine step loop (Next)
-├── serving/               # FastAPI serving layer
+│   └── inference.py       # SimpleLLMEngine runtime orchestrator
+├── serving/               # FastAPI serving layer (Next)
 ├── distributed/           # Fault tolerance & state sync
 ├── tests/                 # Unit & integration test suites
 ├── requirements.txt
