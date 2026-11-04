@@ -20,12 +20,22 @@ A lightweight LLM serving engine built from scratch in pure Python and PyTorch.
 
 ### 4. GPT Model & HuggingFace Weight Loading — `model/transformer.py`
 * Decoder-only Transformer model assembling token embeddings, stacked Transformer blocks, final LayerNorm, and tied language model head.
-* HuggingFace weight importer (`from_pretrained`) that translates OpenAI `Conv1D` and fused QKV parameters into our custom architecture.
-* Verified for both prompt prefill and iterative single-token generation with KV-caching.
+* HuggingFace weight importer (`from_pretrained`) translating OpenAI parameters into our custom architecture.
+* Verified for both prompt prefill and iterative single-token generation.
 
 ### 5. Pre-Allocated KV-Cache — `model/kv_cache.py`
-* **`StaticKVCache`**: Eliminates `torch.cat` memory allocations by writing new keys and values into pre-allocated static tensors in constant $\mathcal{O}(1)$ time.
-* **`MultiSeqKVCache`**: Multi-layer, multi-sequence cache tracking independent sequence lengths per request to support continuous batching.
+* **`StaticKVCache`**: Eliminates `torch.cat` reallocations by writing keys and values into pre-allocated static tensors in constant $\mathcal{O}(1)$ time.
+* **`MultiSeqKVCache`**: Multi-layer, multi-sequence cache tracking independent sequence lengths per request.
+
+### 6. Paged Memory Block Manager — `engine/block_manager.py`
+* Operating system-style virtual memory paging dividing KV-cache VRAM into fixed physical blocks (e.g. 16 tokens/block).
+* Maps logical sequence tokens to non-contiguous physical blocks via page tables.
+* Eliminates internal and external GPU memory fragmentation.
+
+### 7. Dual Schedulers (Static vs. Continuous) — `engine/scheduler.py`
+* **`Sequence` State Machine**: Tracks request lifecycles across `WAITING`, `RUNNING`, and `FINISHED`.
+* **`StaticBatchingScheduler`**: Traditional batching baseline that locks a batch until all sequences finish.
+* **`ContinuousBatchingScheduler`**: Iteration-level continuous batching with instant finished sequence eviction, zero-delay waiting request admission, and memory preemption protection.
 
 ---
 
@@ -37,7 +47,10 @@ vllm-python/
 │   ├── attention.py       # MultiHeadAttention with RoPE and KV-cache support
 │   ├── kv_cache.py        # StaticKVCache & MultiSeqKVCache memory managers
 │   └── transformer.py     # RoPE, FFN, TransformerBlock, and GPTModel
-├── engine/                # BlockManager & PagedAttention (In Progress)
+├── engine/
+│   ├── block_manager.py   # Paged memory block allocator & page tables
+│   ├── scheduler.py       # Static & Continuous Batching schedulers
+│   └── inference.py       # SimpleLLMEngine step loop (Next)
 ├── serving/               # FastAPI serving layer
 ├── distributed/           # Fault tolerance & state sync
 ├── tests/                 # Unit & integration test suites
